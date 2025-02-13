@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Electron Screen Streamer (Client)</title>
+  <!-- Socket.IO 클라이언트 라이브러리 (CDN 사용) -->
+  <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+</head>
+<body>
+  <h1>화면 스트리밍 클라이언트</h1>
+  <button id="startBtn">스트리밍 시작</button>
+  <video id="video" autoplay controls style="width: 100%;"></video>
+  
+  <script src="renderer.js"></script>
+</body>
+</html>
