@@ -12,6 +12,7 @@
   "dependencies": {
     "electron": "^34.1.1",
     "eletron": "^0.0.1-security",
+    "net": "^1.0.2",
     "socket.io-client": "^4.8.1"
   }
 }
