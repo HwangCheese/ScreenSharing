@@ -13,7 +13,7 @@ io.on("connection", (socket) => {
 
   socket.on("screen-data", (data) => {
     // 받은 화면 데이터를 모든 클라이언트에 브로드캐스트
-    socket.broadcast.emit("screen-data", data);
+    socket.broadcast.emit("screen-data", Buffer.from(data));
   });
 
   socket.on("disconnect", () => {

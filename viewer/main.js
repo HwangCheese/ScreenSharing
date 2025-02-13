@@ -4,7 +4,7 @@ const io = require("socket.io-client");
 let mainWindow;
 let socket = io("http://localhost:3000"); // 서버와 연결
 
-app.disableHardwareAcceleration();
+app.disableHardwareAcceleration(); // 이 부분은 main.js에서 호출
 
 app.whenReady().then(() => {
   mainWindow = new BrowserWindow({
@@ -18,11 +18,19 @@ app.whenReady().then(() => {
 
   mainWindow.loadFile("index.html");
 
-  socket.on("screen-data", (data) => {
-    mainWindow.webContents.send("update-screen", data);
+  // 렌더링 프로세스가 준비된 후에만 소켓 데이터 전송
+  mainWindow.webContents.once('dom-ready', () => {
+    socket.on("screen-data", (data) => {
+      try {
+        mainWindow.webContents.send("update-screen", data);
+      } catch (err) {
+        console.error("렌더링 프로세스 전송 오류:", err);
+      }
+    });
   });
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
