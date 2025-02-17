@@ -1,28 +1,34 @@
-const { app, BrowserWindow } = require("electron");
-const io = require("socket.io-client");
+const { app, BrowserWindow, desktopCapturer, ipcMain, session } = require("electron");
+const path = require('path');
 
 let mainWindow;
-let socket = io("http://localhost:3000"); // 서버와 연결
-
-app.disableHardwareAcceleration();
 
 app.whenReady().then(() => {
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-    },
-  });
+    mainWindow = new BrowserWindow({
+        width: 800,
+        height: 600,
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false
+        }
+    });
 
-  mainWindow.loadFile("index.html");
+    mainWindow.loadFile("index.html");
 
-  socket.on("screen-data", (data) => {
-    mainWindow.webContents.send("update-screen", data);
-  });
-});
+    // 화면 공유 요청을 처리하는 핸들러
+    ipcMain.handle("get-sources", async () => {
+        const sources = await desktopCapturer.getSources({ types: ['screen'] });
+        return sources;
+    });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+    session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+        desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
+            callback({ video: sources[0], audio: 'loopback' });
+        }, { useSystemPicker: true });
+    });
+
+    // 윈도우가 닫히면 앱 종료
+    app.on('window-all-closed', () => {
+        if (process.platform !== 'darwin') app.quit();
+    });
 });
