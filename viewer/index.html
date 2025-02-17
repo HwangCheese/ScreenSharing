@@ -1,13 +1,12 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>화면 뷰어</title>
+  <meta charset="UTF-8">
+  <title>Receiver</title>
 </head>
 <body>
-    <h1>실시간 화면 공유</h1>
-    <video id="screen" autoplay controls style="width: 100%;">
-    <script src="renderer.js"></script>
+  <!-- 수신한 비디오 스트림을 표시할 비디오 요소 -->
+  <video id="videoReceiver" controls autoplay style="width: 100%; height: auto;"></video>
+  <script src="renderer.js"></script>
 </body>
 </html>
