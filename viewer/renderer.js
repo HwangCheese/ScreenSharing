@@ -1,32 +1,61 @@
-const { app, BrowserWindow } = require("electron");
-const io = require("socket.io-client");
+const io = require('socket.io-client');
+const socket = io('http://localhost:3000');
 
-const socket = io("http://localhost:3000"); // 서버 연결
+// 스레드를 2개
+// 하나는 decording 스레드, 하나는
 
-const videoElement = document.getElementById("screen"); // <video> 태그 가져오기
-const mediaSource = new MediaSource(); // MediaSource 객체 생성
-videoElement.src = URL.createObjectURL(mediaSource); // MediaSource로 비디오 연결
-
-let sourceBuffer = null;
-
-mediaSource.addEventListener("sourceopen", () => {
-  // MediaSource가 열렸을 때, SourceBuffer를 추가
-  sourceBuffer = mediaSource.addSourceBuffer('video/webm; codecs="vp8"');
+document.addEventListener('DOMContentLoaded', () => {
+  const videoElement = document.getElementById('videoReceiver');
+  if (!videoElement) {
+    console.error("비디오 요소를 찾을 수 없습니다.");
+    return;
+  }
   
-  socket.on("screen-data", (data) => {
-    if (sourceBuffer && !sourceBuffer.updating && data) {
-      // SourceBuffer가 비어 있고 데이터가 있을 때만 appendBuffer 실행
-      try {
-        sourceBuffer.appendBuffer(new Uint8Array(data));
-      } catch (err) {
-        console.error("Buffer 추가 실패:", err);
-      }
-    }
-  });
-});
+  if ('MediaSource' in window) {
+    // MediaSource 객체 생성
+    const mediaSource = new MediaSource();
+    videoElement.src = URL.createObjectURL(mediaSource);
 
-mediaSource.addEventListener("sourceended", () => {
-  console.log("MediaSource가 닫혔습니다.");
-  // MediaSource가 끝나면 추가적으로 처리할 내용이 있으면 여기서 해줄 수 있음
-});
+    mediaSource.addEventListener('sourceopen', () => {
+      const mime = 'video/webm; codecs="vp8"'; // 전송 측에서 사용한 mimeType과 일치해야 함
+      const sourceBuffer = mediaSource.addSourceBuffer(mime);
+      
+      // 청크를 순차적으로 추가하기 위한 큐 (간단한 예시)
+      const queue = [];
+      let isUpdating = false;
+      
+      // SourceBuffer에 청크를 추가하는 함수
+      const appendChunk = (chunk) => {
+        if (sourceBuffer.updating || isUpdating) {
+          // 업데이트 중이면 큐에 저장
+          queue.push(chunk);
+        } else {
+          isUpdating = true;
+          try {
+            sourceBuffer.appendBuffer(chunk);
+          } catch (e) {
+            console.error('SourceBuffer에 추가 중 오류:', e);
+          }
+        }
+      };
 
+      // 업데이트가 완료되면 큐에 있는 청크들을 추가
+      sourceBuffer.addEventListener('updateend', () => {
+        isUpdating = false;
+        if (queue.length > 0) {
+          const nextChunk = queue.shift();
+          appendChunk(nextChunk);
+        }
+      });
+
+      // Socket.IO로부터 'video-frame' 이벤트 수신
+      socket.on('video-frame', (data) => {
+        // data는 ArrayBuffer로 전송된 청크여야 합니다.
+        const chunk = new Uint8Array(data);
+        appendChunk(chunk);
+      });
+    });
+  } else {
+    console.error("MediaSource API가 이 브라우저에서 지원되지 않습니다.");
+  }
+});
