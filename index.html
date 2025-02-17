@@ -1,13 +1,16 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>화면 뷰어</title>
+    <title>Screen Share Sender</title>
 </head>
 <body>
-    <h1>실시간 화면 공유</h1>
-    <img id="screen" style="width: 100%;">
+    <h1>화면 공유 – Sender</h1>
+    <button id="start">화면 공유 시작</button>
+    <!-- 화면 캡처 스트림을 위한 video (화면에는 숨김) -->
+    <video id="video" style="display: none;"></video>
+    <!-- canvas: video 프레임을 그린 후 JPEG로 인코딩 -->
+    <canvas id="canvas" style="display: none;"></canvas>
     <script src="renderer.js"></script>
 </body>
 </html>
