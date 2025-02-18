@@ -10,9 +10,16 @@ io.on('connection', (socket) => {
   console.log('클라이언트 연결:', socket.id);
 
   socket.on('video-frame', (data) => {
-    console.log('비디오 프레임 수신');
-    // 받은 비디오 데이터를 다른 클라이언트로 브로드캐스트
-    socket.broadcast.emit('video-frame', data);  // 다른 클라이언트로 전달
+    const receiveTime = performance.now();
+
+    // 송신 → 서버까지 걸린 시간
+    const transmissionTime = receiveTime - data.sendTime;
+
+    // 데이터 그대로 브로드캐스트 (서버 수신 시간 포함)
+    const sendTime = performance.now();
+    socket.broadcast.emit('video-frame', { buffer: data.buffer, sendTime: data.sendTime, receiveTime });
+    const sendEndTime = performance.now();
+    console.log(`server -> sender 전송 시간: ${sendEndTime - sendTime}`);
   });
 
   socket.on('disconnect', () => {
