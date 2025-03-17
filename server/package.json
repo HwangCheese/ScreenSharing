@@ -1,18 +1,16 @@
 {
-  "name": "viewer",
+  "name": "server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
+  "description": "",
   "dependencies": {
-    "electron": "^34.1.1",
     "express": "^4.21.2",
     "http": "^0.0.1-security",
-    "path": "^0.12.7",
     "socket.io": "^4.8.1"
   }
 }
