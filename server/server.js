@@ -11,15 +11,18 @@ io.on('connection', (socket) => {
 
   socket.on('video-frame', (data) => {
     const receiveTime = performance.now();
-
-    // 송신 → 서버까지 걸린 시간
     const transmissionTime = receiveTime - data.sendTime;
 
-    // 데이터 그대로 브로드캐스트 (서버 수신 시간 포함)
-    const sendTime = performance.now();
+    if (data.isFirst) {
+      socket.emit('first-frame-ack', { receiveTime });
+    }
+
     socket.broadcast.emit('video-frame', { buffer: data.buffer, sendTime: data.sendTime, receiveTime });
-    const sendEndTime = performance.now();
-    console.log(`server -> sender 전송 시간: ${sendEndTime - sendTime}`);
+  });
+
+  socket.on('screen-share-ended', () => {
+    io.emit('transmission-ended');
+    console.log('서버: 화면 전송 종료 알림 전달');
   });
 
   socket.on('disconnect', () => {

@@ -1,19 +1,46 @@
+// Sender-side (client)
 const { ipcRenderer } = require("electron");
 const io = require('socket.io-client');
 const socket = io('http://localhost:3000');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+let userClickTime = null;      // 사용자 클릭 시각
+let firstFrameSentTime = null; // 첫 프레임 전송 시각
+let isFirst = true;  // 첫 프레임인지 여부 체크
+
+const now = new Date();
+const timestamp = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
+const experimentNumber = 1;
+
+const logFileName = `log_${timestamp}_${experimentNumber}.txt`;
+const logStream = fs.createWriteStream(logFileName, { flags: 'a' });
+
+const originalLog = console.log;
+console.log = function (...args) {
+    const timeStr = new Date().toLocaleString();
+    const msg = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
+    const fullMsg = `[${timeStr}] ${msg}`;
+
+    originalLog(fullMsg);
+    logStream.write(fullMsg + '\n');
+};
 
 let mediaRecorder;
-let compressionTimes = [];
-let compressedSizes = [];
+const chunks = [];
 
-// 화면 캡처 및 스트리밍 시작
+// chunk 간격 측정을 위한 변수
+let startTime = null;      // 녹화 시작 시각
+let lastChunkTime = null;  // 바로 이전 chunk가 발생한 시각
+
 async function startScreenShare() {
+    userClickTime = Date.now();
     try {
-        // 메인 프로세스에 화면 소스 요청
         const sources = await ipcRenderer.invoke('get-sources');
-        const screenSource = sources[0];  // 첫 번째 화면 소스를 선택
+        const screenSource = sources[0];
 
-        // 화면 캡처 스트림 요청
+        // 15fps 제한 (chromeMediaSource)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: false,
             video: {
@@ -21,7 +48,8 @@ async function startScreenShare() {
                     chromeMediaSource: 'desktop',
                     chromeMediaSourceId: screenSource.id,
                     maxWidth: 1920,
-                    maxHeight: 1080
+                    maxHeight: 1080,
+                    maxFrameRate: 15
                 }
             }
         });
@@ -30,80 +58,169 @@ async function startScreenShare() {
         video.srcObject = stream;
         video.play();
 
-        // MediaRecorder로 비디오 캡처
         mediaRecorder = new MediaRecorder(stream, {
-            mimeType: 'video/webm; codecs=vp8', // 비디오 압축 코덱 (vp8, vp9 등)
-            videoBitsPerSecond: 4000000, // 비디오 비트 전송률 설정 (3Mbps)
+            mimeType: 'video/webm; codecs=vp8',
+            videoBitsPerSecond: 2000000,
         });
 
-        mediaRecorder.ondataavailable = async (event) => {
-            if (event.data.size > 0) {
-                try {
-                    const startTime = performance.now(); // 시작 시간 기록
-                    const buffer = await event.data.arrayBuffer();
-                    const endTime = performance.now(); // 종료 시간 기록
-
-                    // 압축된 데이터 크기 (바이트 → KB 변환)
-                    const compressedSizeKB = buffer.byteLength / 1024;
-
-                    // 예상 원본 데이터 크기 계산 (비트 전송률 기반)
-                    const bitrate = 4000000; // 3Mbps (MediaRecorder 설정값)
-                    const captureInterval = 100 / 1000; // 100ms → 초 단위 변환
-                    const estimatedOriginalSize = (bitrate * captureInterval) / 8 / 1024; // KB 단위 변환
-
-                    // 압축률 계산
-                    const compressionRatio = (compressedSizeKB / estimatedOriginalSize) * 100;
-
-                    console.log(`🔹 압축 시간: ${endTime - startTime}ms`);
-                    console.log(`📏 압축된 데이터 크기: ${compressedSizeKB.toFixed(2)} KB`);
-                    console.log(`📉 압축 비율: ${compressionRatio.toFixed(2)}%`);
-
-                    // 데이터 저장
-                    compressionTimes.push(endTime - startTime);
-                    compressedSizes.push(compressedSizeKB);
-
-                    const sendTime = performance.now();
-                    socket.emit('video-frame', {buffer, sendTime});
-                    const sendEndTime = performance.now();
-                    console.log(`sender -> server 전송 시간: ${sendEndTime - sendTime}`);
-                } catch (e) {
-                    console.error('ArrayBuffer 변환 오류:', e);
-                }
+        // 녹화 종료 시 처리
+        mediaRecorder.onstop = () => {
+            if (chunks.length === 0) {
+                console.error("녹화된 chunk 없음");
+                return;
             }
+
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const filePath = `recorded_${timestamp}_${experimentNumber}.webm`;
+            const reader = new FileReader();
+
+            reader.onload = () => {
+                const buffer = Buffer.from(reader.result);
+                fs.writeFile(filePath, buffer, (err) => {
+                    if (err) {
+                        console.error("웹엠 저장 실패:", err);
+                    } else {
+                        console.log(`녹화 파일 저장 완료: ${filePath}`);
+                        analyzeVideoFPS(filePath);
+                    }
+                });
+            };
+            reader.readAsArrayBuffer(blob);
         };
 
-        mediaRecorder.start(100);  // 100ms마다 비디오 캡처
-        console.log("📹 화면 공유 시작됨!");
+        // 실제 chunk가 만들어졌을 때(ondataavailable)
+        mediaRecorder.ondataavailable = async (event) => {
+            const nowTime = Date.now();
+        
+            if (!lastChunkTime) {
+                const diffFromStart = nowTime - startTime;
+                console.log(`\n[첫 chunk 발생] 녹화 시작 후 ${diffFromStart}ms 만에 chunk가 만들어짐`);
+                lastChunkTime = nowTime;
+            } else {
+                const diff = nowTime - lastChunkTime;
+                console.log(`[chunk 간격] ${diff}ms 만에 새로운 chunk가 만들어짐`);
+                lastChunkTime = nowTime;
+            }
+        
+            if (event.data.size > 0) {
+                chunks.push(event.data);
+        
+                const buffer = await event.data.arrayBuffer();
+        
+                // 첫 프레임이면 시간 측정
+                if (!firstFrameSentTime) {
+                    firstFrameSentTime = Date.now();
+                    const latency = firstFrameSentTime - userClickTime;
+                    console.log(`\n🚀 버튼 클릭 후 첫 프레임 서버 전송까지 걸린 시간: ${latency}ms`);
+                }
+        
+                socket.emit('video-frame', { buffer, isFirst });
+                isFirst = false;
+                analyzeChunkFrames(event.data, nowTime);
+            }
+        };        
+        
+        // 녹화 시작 시각 기록
+        startTime = Date.now();
+
+        // 150ms 간격으로 chunk 발생
+        mediaRecorder.start(150);
+        console.log("화면 공유 시작");
+
+        // 60초 후 자동 종료
+        setTimeout(stopScreenShare, 60000);
+
     } catch (err) {
         console.error('화면 캡처 오류:', err);
     }
 }
 
-// 스트리밍 중지 함수
+function analyzeChunkFrames(blob, timestamp) {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+        const buffer = Buffer.from(reader.result);
+        const tempFilePath = path.join(os.tmpdir(), `chunk_${timestamp}.webm`);
+
+        fs.writeFile(tempFilePath, buffer, (err) => {
+            if (err) {
+                console.error("임시 chunk 저장 실패:", err);
+                return;
+            }
+
+            const ffprobeCmd = `ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 "${tempFilePath}"`;
+
+            exec(ffprobeCmd, (err, stdout, stderr) => {
+                if (err) {
+                    console.error("❌ ffprobe chunk 분석 오류:", err);
+                    return;
+                }
+
+                const totalFrames = parseInt(stdout.trim());
+                console.log(`✅ 현재 chunk 프레임 수: ${totalFrames}`);
+
+                // 분석 후 임시 파일 삭제 (선택)
+                fs.unlink(tempFilePath, (unlinkErr) => {
+                    if (unlinkErr) {
+                        console.error("임시 파일 삭제 실패:", unlinkErr);
+                    }
+                });
+            });
+        });
+    };
+
+    reader.readAsArrayBuffer(blob);
+}
+
+socket.on('first-frame-ack', ({ receiveTime }) => {
+    const ackReceiveTime = Date.now(); // 클라이언트가 ACK 받은 시각
+    const rtt = ackReceiveTime - firstFrameSentTime;
+    const oneWayLatency = rtt / 2;
+
+    console.log(`📨 서버로부터 첫 프레임 ACK 수신!`);
+    console.log(`🔁 RTT (왕복 지연 시간): ${rtt}ms`);
+    console.log(`➡️ 추정 단방향 지연 시간: ${oneWayLatency.toFixed(2)}ms`);
+});
+
 function stopScreenShare() {
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
         mediaRecorder.stop();
-        console.log("⏹️ 화면 공유 중지됨!");
+        console.log("⏹️ 화면 공유 중지!");
 
-        // 평균 값 계산
-        if (compressionTimes.length > 0 && compressedSizes.length > 0) {
-            const avgCompressionTime = (compressionTimes.reduce((a, b) => a + b, 0) / compressionTimes.length).toFixed(2);
-            const avgCompressedSize = (compressedSizes.reduce((a, b) => a + b, 0) / compressedSizes.length).toFixed(2);
+        setTimeout(() => {
+            socket.emit('screen-share-ended');
+            console.log("서버로 'screen-share-ended' 전송 완료");
+        }, 5000);
 
-            console.log(`📊 평균 압축 시간: ${avgCompressionTime}ms`);
-            console.log(`📦 평균 압축 데이터 크기: ${avgCompressedSize} KB`);
-        }
-
-        // 데이터 초기화
-        compressionTimes = [];
-        compressedSizes = [];
+        // 측정 변수 초기화
+        startTime = null;
+        lastChunkTime = null;
     }
 }
 
 document.getElementById('start').addEventListener('click', startScreenShare);
 document.getElementById('stop').addEventListener('click', stopScreenShare);
 
-// 'frame' 이벤트로 전송된 이미지 데이터를 화면에 표시
 socket.on('frame', (dataUrl) => {
     document.getElementById('screen').src = dataUrl;
 });
+
+// ffprobe 분석
+const { exec } = require("child_process");
+function analyzeVideoFPS(filePath) {
+    const ffprobeCmd = `ffprobe -v error -count_frames -select_streams v:0 \
+        -show_entries stream=nb_read_frames -of csv=p=0 "${filePath}"`;
+
+    exec(ffprobeCmd, (err, stdout, stderr) => {
+        if (err) {
+            console.error("❌ ffprobe 실행 오류:", err);
+            return;
+        }
+        const totalFrames = parseInt(stdout.trim());
+        const durationSec = 60;
+        const fps = totalFrames / durationSec;
+
+        console.log(`\n📈 총 프레임 수: ${totalFrames}`);
+        console.log(`⏱️ 실제 FPS: ${fps.toFixed(2)}`);
+    });
+}
