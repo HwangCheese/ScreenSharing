@@ -1,6 +1,7 @@
 // Sender-side (client)
 const { ipcRenderer } = require("electron");
 const io = require('socket.io-client');
+//const socket = io('http://223.194.152.78:3000');
 const socket = io('http://localhost:3000');
 const fs = require('fs');
 const path = require('path');
@@ -27,12 +28,14 @@ console.log = function (...args) {
     logStream.write(fullMsg + '\n');
 };
 
+const MAX = 100000000;
 let mediaRecorder;
-const chunks = [];
-
+const chunks = new Array(MAX);
+let chunkIdx = 0;
 // chunk 간격 측정을 위한 변수
 let startTime = null;      // 녹화 시작 시각
 let lastChunkTime = null;  // 바로 이전 chunk가 발생한 시각
+const MILESTONES = [60000, 300000, 1800000];
 
 async function startScreenShare() {
     userClickTime = Date.now();
@@ -61,16 +64,28 @@ async function startScreenShare() {
         mediaRecorder = new MediaRecorder(stream, {
             mimeType: 'video/webm; codecs=vp8',
             videoBitsPerSecond: 2000000,
+            //videoKeyFrameIntervalDuration:150
         });
 
         // 녹화 종료 시 처리
         mediaRecorder.onstop = () => {
-            if (chunks.length === 0) {
+            if (chunkIdx === 0) {
                 console.error("녹화된 chunk 없음");
                 return;
             }
 
-            const blob = new Blob(chunks, { type: 'video/webm' });
+            const totalChunks = Math.min(chunkIdx, MAX);
+            const startIdx = chunkIdx >= MAX ? (chunkIdx % MAX) : 0;
+
+            const orderedChunks = [];
+            for (let i = 0; i < totalChunks; i++) {
+                const chunk = chunks[(startIdx + i) % MAX];
+                if (chunk) {  // null 아닌 것만 push
+                    orderedChunks.push(chunk);
+                }
+            }
+
+            const blob = new Blob(orderedChunks, { type: 'video/webm' });
             const filePath = `recorded_${timestamp}_${experimentNumber}.webm`;
             const reader = new FileReader();
 
@@ -90,36 +105,48 @@ async function startScreenShare() {
 
         // 실제 chunk가 만들어졌을 때(ondataavailable)
         mediaRecorder.ondataavailable = async (event) => {
-            const nowTime = Date.now();
-        
-            if (!lastChunkTime) {
-                const diffFromStart = nowTime - startTime;
-                console.log(`\n[첫 chunk 발생] 녹화 시작 후 ${diffFromStart}ms 만에 chunk가 만들어짐`);
-                lastChunkTime = nowTime;
-            } else {
-                const diff = nowTime - lastChunkTime;
-                console.log(`[chunk 간격] ${diff}ms 만에 새로운 chunk가 만들어짐`);
-                lastChunkTime = nowTime;
-            }
-        
+            const nowTime = performance.now();
+            const sliceDurMs  = lastChunkTime ? nowTime - lastChunkTime : 0;
+
+
+            // if (!lastChunkTime) {
+            //     const diffFromStart = nowTime - startTime;
+            //     console.log(`\n[첫 chunk 발생] 녹화 시작 후 ${diffFromStart}ms 만에 chunk가 만들어짐`);
+            //     lastChunkTime = nowTime;
+            // }
+
+
+            // if (lastChunkTime !== null) {
+            //     const diff = nowTime - lastChunkTime;
+            //     console.log(`🧩 chunk #${++chunkIdx}  간격: ${diff.toFixed(1)} ms`);
+            // } else {
+            //     console.log(`🧩 chunk #${++chunkIdx}  (first)`);
+            // }
+            lastChunkTime = nowTime;
+
             if (event.data.size > 0) {
-                chunks.push(event.data);
-        
+                chunks[chunkIdx++ % MAX] = event.data;
+
                 const buffer = await event.data.arrayBuffer();
-        
+
                 // 첫 프레임이면 시간 측정
-                if (!firstFrameSentTime) {
-                    firstFrameSentTime = Date.now();
-                    const latency = firstFrameSentTime - userClickTime;
-                    console.log(`\n🚀 버튼 클릭 후 첫 프레임 서버 전송까지 걸린 시간: ${latency}ms`);
-                }
-        
-                socket.emit('video-frame', { buffer, isFirst });
-                isFirst = false;
-                analyzeChunkFrames(event.data, nowTime);
+                // if (!firstFrameSentTime) {
+                //     firstFrameSentTime = Date.now();
+                //     const latency = firstFrameSentTime - userClickTime;
+                //     console.log(`\n🚀 버튼 클릭 후 첫 프레임 서버 전송까지 걸린 시간: ${latency}ms`);
+                // }
+
+                socket.emit('video-frame', {
+                    buffer,
+                    idx:  chunkIdx,          // 청크 번호
+                    dur:  sliceDurMs,          // 이번 청크 길이(ms)isFirst });
+                    tSend: nowTime, 
+                    isFirst: false
+                });
+                //analyzeChunkFrames(event.data, nowTime);
             }
-        };        
-        
+        };
+
         // 녹화 시작 시각 기록
         startTime = Date.now();
 
@@ -127,7 +154,15 @@ async function startScreenShare() {
         mediaRecorder.start(150);
         console.log("화면 공유 시작");
 
-        // 60초 후 자동 종료
+        MILESTONES.forEach((ms) => {
+            setTimeout(() => {
+                socket.emit("milestone", {
+                    mark: ms,          
+                    senderTime: Date.now(),
+                });
+            }, ms);
+        });
+        // ---- auto‑stop after 30 min ----
         setTimeout(stopScreenShare, 60000);
 
     } catch (err) {

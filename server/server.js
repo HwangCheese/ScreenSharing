@@ -17,7 +17,17 @@ io.on('connection', (socket) => {
       socket.emit('first-frame-ack', { receiveTime });
     }
 
-    socket.broadcast.emit('video-frame', { buffer: data.buffer, sendTime: data.sendTime, receiveTime });
+    socket.broadcast.emit('video-frame', { 
+      buffer: data.buffer, 
+      idx: data.idx,
+      dur: data.dur,
+      tSend: data.tSend,
+      tRecv: receiveTime
+    });
+  });
+
+  socket.on("milestone", (m) => {
+    io.emit("milestone", m);
   });
 
   socket.on('screen-share-ended', () => {
