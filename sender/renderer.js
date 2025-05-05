@@ -1,4 +1,3 @@
-// Modified Sender-side (client) code
 const { ipcRenderer } = require("electron");
 const io = require('socket.io-client');
 //const socket = io('http://192.168.137.1:3000'); // For different computers
@@ -9,7 +8,7 @@ const os = require('os');
 const { exec } = require("child_process");
 
 let userClickTime = null;      // User click time
-let firstFrameSentTime = null; // First frame send time
+let frameSentTime = null; // First frame send time
 let startTime = null;          // Recording start time
 
 const now = new Date();
@@ -117,39 +116,37 @@ async function startScreenShare() {
 
         // Handle chunk creation
         mediaRecorder.ondataavailable = async (event) => {
-            const nowTime = performance.now();
+            frameSentTime = performance.now();
             
             // Calculate duration since last chunk
-            const sliceDurMs = lastChunkTime ? nowTime - lastChunkTime : 0;
+            const sliceDurMs = lastChunkTime ? frameSentTime - lastChunkTime : 0;
             
             // Store timing info
-            chunkTimes[chunkIdx] = nowTime;
+            chunkTimes[chunkIdx] = frameSentTime;
             if (lastChunkTime) {
                 chunkDurations[chunkIdx-1] = sliceDurMs;
             }
             
-            lastChunkTime = nowTime;
+            lastChunkTime = frameSentTime;
 
             if (event.data.size > 0) {
                 chunks[chunkIdx % MAX] = event.data;
                 const buffer = await event.data.arrayBuffer();
             
                 // Record first frame send time
-                const isFirst = (chunkIdx === 0);
-                if (isFirst) {
-                    firstFrameSentTime = Date.now();
-                    const latency = firstFrameSentTime - userClickTime;
-                    console.log(`First frame ready to send ${latency}ms after button click`);
-                }
+                // const isFirst = (chunkIdx === 0);
+                // if (isFirst) {
+                //     firstFrameSentTime = Date.now();
+                //     const latency = firstFrameSentTime - userClickTime;
+                //     console.log(`First frame ready to send ${latency}ms after button click`);
+                // }
             
                 // Send frame to server with timing metadata
                 socket.emit('video-frame', {
                     buffer,
                     idx: chunkIdx,
                     dur: sliceDurMs,
-                    tRel: nowTime - startTime,
                     tAbs: Date.now(),
-                    isFirst
                 });
             
                 console.log(`Chunk #${chunkIdx} generated, interval = ${sliceDurMs.toFixed(2)}ms`);  // ⬅️ 추가
@@ -182,7 +179,10 @@ async function startScreenShare() {
                     mark: ms,
                     senderTime: Date.now(),
                     avgChunkDuration: avgDuration,
-                    totalChunks: chunkIdx
+                    totalChunks: chunkIdx,
+                    minLate: minLate,
+                    maxLate: maxLate,
+                    avgLate: sumLate / latencyIdx
                 });
                 
                 console.log(`Milestone ${ms}ms: Average chunk duration = ${avgDuration.toFixed(2)}ms`);
@@ -213,30 +213,48 @@ function stopScreenShare() {
     }
 }
 
-// Handle first frame acknowledgment from server
-socket.on('first-frame-ack', ({ receiveTime, serverTime }) => {
-    const ackReceiveTime = Date.now(); // Time client received ACK
-    const rtt = ackReceiveTime - firstFrameSentTime;
-    const oneWayLatency = rtt / 2;
-    
-    // Calculate time offset between client and server
-    const timeOffset = serverTime - ackReceiveTime;
+const MAX_FRAME_LOG = 10000000;
+const oneWayLatencies = new Array(MAX_FRAME_LOG).fill(null);
+let sumLate = 0;
+let latencyIdx = 0;
+let minLate = Infinity;
+let maxLate = -Infinity;
 
-    console.log(`Received first frame ACK from server!`);
-    console.log(`RTT (round-trip time): ${rtt}ms`);
-    console.log(`Estimated one-way latency: ${oneWayLatency.toFixed(2)}ms`);
-    console.log(`Time offset between client and server: ${timeOffset}ms`);
-    
-    // Save sync data
-    fs.writeFileSync(`time_sync_${timestamp}.json`, JSON.stringify({
-        clientSendTime: firstFrameSentTime,
-        serverReceiveTime: serverTime,
-        clientAckTime: ackReceiveTime,
-        rtt,
-        estimatedOneWayLatency: oneWayLatency,
-        timeOffset
-    }));
+socket.on('ack-frame', () => {
+    const ackReceiveTime = performance.now();
+    const rtt = ackReceiveTime - frameSentTime;
+    const oneWayLatency = rtt / 2;
+    oneWayLatencies[latencyIdx % MAX_FRAME_LOG] = oneWayLatency;
+    sumLate += oneWayLatency;
+    if (oneWayLatency < minLate) minLate = oneWayLatency;
+    if (oneWayLatency > maxLate) maxLate = oneWayLatency;
+    latencyIdx++;
 });
+
+// Handle first frame acknowledgment from server
+// socket.on('first-frame-ack', ({ receiveTime, serverTime }) => {
+//     const ackReceiveTime = Date.now(); // Time client received ACK
+//     const rtt = ackReceiveTime - frameSentTime;
+//     const oneWayLatency = rtt / 2;
+    
+//     // Calculate time offset between client and server
+//     const timeOffset = serverTime - ackReceiveTime;
+
+//     console.log(`Received first frame ACK from server!`);
+//     console.log(`RTT (round-trip time): ${rtt}ms`);
+//     console.log(`Estimated one-way latency: ${oneWayLatency.toFixed(2)}ms`);
+//     console.log(`Time offset between client and server: ${timeOffset}ms`);
+    
+//     // Save sync data
+//     fs.writeFileSync(`time_sync_${timestamp}.json`, JSON.stringify({
+//         clientSendTime: frameSentTime,
+//         serverReceiveTime: serverTime,
+//         clientAckTime: ackReceiveTime,
+//         rtt,
+//         estimatedOneWayLatency: oneWayLatency,
+//         timeOffset
+//     }));
+// });
 
 // Set up UI handlers
 document.getElementById('start').addEventListener('click', startScreenShare);
