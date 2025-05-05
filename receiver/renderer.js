@@ -114,9 +114,10 @@ document.addEventListener('DOMContentLoaded', () => {
       let prevRecv = null;
       let prevDur = null;
 
-      socket.on('video-frame', ({ buffer, idx, dur, tRel }) => {
+      socket.on('video-frame', ({ buffer, idx, dur }) => {
         const tNow = performance.now();
         const chunk = new Uint8Array(buffer);
+        console.log(dur);
 
         if (startRecv === null) {
           // 첫 프레임이면 현재 시각을 기준점으로 설정
@@ -130,9 +131,9 @@ document.addEventListener('DOMContentLoaded', () => {
           logMessage(`🎬 첫 프레임 수신 시간: ${firstReceiveTime}`);
         }
 
-        // if (prevRecv !== null && prevDur !== null) {
+        // if (prevRecv !== null) {
         //   // chunk 간 지연 = (실제 도착 간격) - (보낸 쪽 chunk 길이)
-        //   const delay = (tNow - prevRecv) - prevDur;
+        //   const delay = (tNow - prevRecv);
 
         //   delays[delayInx % MAX_FRAME_LOG] = delay;
         //   sumDelay += delay;
@@ -143,16 +144,16 @@ document.addEventListener('DOMContentLoaded', () => {
         // prevRecv = tNow;
         // prevDur  = dur;
 
-        if (lastFrameShownTime !== null) {
-          const interDelay = tNow - lastFrameShownTime;
-          logMessage(`앞 프레임 이후 빈 시간: ${interDelay.toFixed(1)}ms`);
-          delays[delayInx % MAX_FRAME_LOG] = interDelay;
-          sumDelay += interDelay;
-          if (interDelay < minDelay) minDelay = interDelay;
-          if (interDelay > maxDelay) maxDelay = interDelay;
-          delayInx++;
-          lastFrameShownTime = null;
-        }
+        // if (lastFrameShownTime !== null) {
+        //   const interDelay = tNow - lastFrameShownTime;
+        //   logMessage(`앞 프레임 이후 빈 시간: ${interDelay.toFixed(1)}ms`);
+        //   delays[delayInx % MAX_FRAME_LOG] = interDelay;
+        //   sumDelay += interDelay;
+        //   if (interDelay < minDelay) minDelay = interDelay;
+        //   if (interDelay > maxDelay) maxDelay = interDelay;
+        //   delayInx++;
+        //   lastFrameShownTime = null;
+        // }
 
         appendChunk(chunk);
         receivedChunks[chunkIdx % MAX_FRAME_LOG] = chunk;
@@ -192,39 +193,39 @@ document.addEventListener('DOMContentLoaded', () => {
         const duration = lastReceiveTime - firstReceiveTime;
 
         // 최종 성능 통계 기록
-        const avgDelay = delayInx > 0 ? sumDelay / delayInx : 0; // delayInx가 0이 아닌지 확인
-        const avgDecode = dInx > 0 ? sumDecode / dInx : 0; // dInx가 0이 아닌지 확인
+        // const avgDelay = delayInx > 0 ? sumDelay / delayInx : 0; // delayInx가 0이 아닌지 확인
+        // const avgDecode = dInx > 0 ? sumDecode / dInx : 0; // dInx가 0이 아닌지 확인
 
-        const stats = {
-          timestamp: new Date().toLocaleString(),
-          firstFrameReceiveTime: firstReceiveTime,
-          lastFrameReceiveTime: lastReceiveTime,
-          duration: duration,
-          totalFrames: chunkIdx,
-          avgNetworkDelay: avgDelay,
-          minNetworkDelay: minDelay,
-          maxNetworkDelay: maxDelay,
-          avgDecodeDelay: avgDecode,
-          minDecodeDelay: minDecode,
-          maxDecodeDelay: maxDecode
-        };
+        // const stats = {
+        //   timestamp: new Date().toLocaleString(),
+        //   firstFrameReceiveTime: firstReceiveTime,
+        //   lastFrameReceiveTime: lastReceiveTime,
+        //   duration: duration,
+        //   totalFrames: chunkIdx,
+        //   avgNetworkDelay: avgDelay,
+        //   minNetworkDelay: minDelay,
+        //   maxNetworkDelay: maxDelay,
+        //   avgDecodeDelay: avgDecode,
+        //   minDecodeDelay: minDecode,
+        //   maxDecodeDelay: maxDecode
+        // };
 
-        // 통계 로그에 저장
-        const statsFile = `receiver_stats_${timestamp}_${experimentNumber}.json`;
-        fs.writeFileSync(statsFile, JSON.stringify(stats, null, 2));
-        logMessage(`📊 수신 통계 저장됨: ${statsFile}`);
+        // // 통계 로그에 저장
+        // const statsFile = `receiver_stats_${timestamp}_${experimentNumber}.json`;
+        // fs.writeFileSync(statsFile, JSON.stringify(stats, null, 2));
+        // logMessage(`📊 수신 통계 저장됨: ${statsFile}`);
 
-        // 수신 로그 기록
-        const content = `🕒 기록 시각: ${new Date().toLocaleString()}\n` +
-          `수신 시작: ${firstReceiveTime}\n` +
-          `수신 종료: ${lastReceiveTime}\n` +
-          `총 수신 시간: ${duration}ms\n` +
-          `총 수신 프레임: ${chunkIdx}\n` +
-          `평균 네트워크 지연: ${avgDelay.toFixed(2)}ms\n` +
-          `평균 디코딩 지연: ${avgDecode.toFixed(2)}ms\n`;
+        // // 수신 로그 기록
+        // const content = `🕒 기록 시각: ${new Date().toLocaleString()}\n` +
+        //   `수신 시작: ${firstReceiveTime}\n` +
+        //   `수신 종료: ${lastReceiveTime}\n` +
+        //   `총 수신 시간: ${duration}ms\n` +
+        //   `총 수신 프레임: ${chunkIdx}\n` +
+        //   `평균 네트워크 지연: ${avgDelay.toFixed(2)}ms\n` +
+        //   `평균 디코딩 지연: ${avgDecode.toFixed(2)}ms\n`;
 
-        fs.writeFileSync(logFileName, content, { flag: 'a' });
-        logMessage(`📄 수신 시간 기록 저장됨: ${logFileName}`);
+        // fs.writeFileSync(logFileName, content, { flag: 'a' });
+        // logMessage(`📄 수신 시간 기록 저장됨: ${logFileName}`);
 
         // ✅ 수신된 프레임을 WebM 파일로 저장
         if (chunkIdx > 0) {
@@ -248,13 +249,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 1m, 5m, 30m 마일스톤 오면 한 번만 통계 출력
-    socket.on('milestone', ({ mark, senderTime }) => {
+    socket.on('milestone', ({ mark, senderTime, minLate, maxLate, avgLate }) => {
       const recvNow = Date.now();
       const netDelta = recvNow - senderTime;      // 발신-수신 벽시계 차
 
-      // delayInx가 0인 경우를 방지하기 위한 체크
-      const avg = delayInx > 0 ? (sumDelay / delayInx).toFixed(1) : "N/A";
-      const avgDecode = dInx > 0 ? (sumDecode / dInx).toFixed(1) : "N/A";
+      let avgDecode = sumDecode / dInx;
 
       let label = '';
       if (mark === 60000) label = '⏱️ 1분';
@@ -263,8 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const avgCpu = cpuCount > 0 ? sumCpu / cpuCount : 0;
       const milestoneMsg = `\n${label} 지점 도착!` +
-        `\n  ↔️  sender→receiver 지연: ${netDelta} ms` +
-        `\n  📊 delay 통계   avg ${avg} ms | min ${minDelay.toFixed(1)} ms | max ${maxDelay.toFixed(1)} ms` +
+        `\n  📊 delay 통계   avg ${avgLate} ms | min ${minLate} ms | max ${maxLate} ms` +
         `\n  🎞️ 디코딩→화면 지연 avg ${avgDecode} ms | min ${minDecode.toFixed(1)} ms | max ${maxDecode.toFixed(1)} ms` +
         `\n  🖥️ CPU 사용량   avg ${avgCpu.toFixed(2)}% | min ${minCpuUsage.toFixed(2)}% | max ${maxCpuUsage.toFixed(2)}%`;
 
@@ -274,13 +272,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const milestoneData = {
         timestamp: new Date().toLocaleString(),
         mark: mark,
-        networkLatency: netDelta,
-        avgDelay: avg !== "N/A" ? parseFloat(avg) : null,
-        minDelay: minDelay !== Infinity ? minDelay : null,
-        maxDelay: maxDelay !== -Infinity ? maxDelay : null,
-        avgDecodeDelay: avgDecode !== "N/A" ? parseFloat(avgDecode) : null,
-        minDecodeDelay: minDecode !== Infinity ? minDecode : null,
-        maxDecodeDelay: maxDecode !== -Infinity ? maxDecode : null,
+        delay: {
+          avg: avgLate,
+          min: minLate,
+          max: maxLate
+        },
+        decodeDelay: {
+          avg: avgDecode !== "N/A" ? parseFloat(avgDecode) : null,
+          min: minDecode !== Infinity ? minDecode : null,
+          max: maxDecode !== -Infinity ? maxDecode : null,
+        },
         framesReceived: chunkIdx,
         cpuUsage: {
           avg: avgCpu,
