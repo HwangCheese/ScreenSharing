@@ -5,6 +5,9 @@ const fs = require('fs');
 const { exec } = require("child_process");
 const pidusage = require('pidusage');
 const os = require('os');
+const util  = require('util');
+const { memoryUsage } = require('process');
+const execP = util.promisify(exec);
 
 const now = new Date();
 const timestamp = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
@@ -19,6 +22,7 @@ let maxDelay = -Infinity;
 let delayInx = 0;
 let chunkIdx = 0;
 let sumDelay = 0;
+let sumDecodeSq = 0;
 let startRecv = null;
 
 const decodeDelays = new Array(MAX_FRAME_LOG).fill(null);
@@ -96,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
             decodeDelays[dInx % MAX_FRAME_LOG] = decDelay;
             dInx++;
             sumDecode += decDelay;
+            sumDecodeSq += decDelay * decDelay;
             if (decDelay < minDecode) minDecode = decDelay;
             if (decDelay > maxDecode) maxDecode = decDelay;
           }
@@ -117,18 +122,15 @@ document.addEventListener('DOMContentLoaded', () => {
       socket.on('video-frame', ({ buffer, idx, dur }) => {
         const tNow = performance.now();
         const chunk = new Uint8Array(buffer);
-        console.log(dur);
 
         if (startRecv === null) {
           // 첫 프레임이면 현재 시각을 기준점으로 설정
           startRecv = tNow;
-          logMessage(`🎬 첫 프레임 수신 시작: ${startRecv}`);
         }
 
         // 첫 프레임 수신 시점 기록 (최초 한 번만)
         if (!firstReceiveTime) {
           firstReceiveTime = tNow;
-          logMessage(`🎬 첫 프레임 수신 시간: ${firstReceiveTime}`);
         }
 
         // if (prevRecv !== null) {
@@ -249,11 +251,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 1m, 5m, 30m 마일스톤 오면 한 번만 통계 출력
-    socket.on('milestone', ({ mark, senderTime, minLate, maxLate, avgLate }) => {
+    socket.on('milestone', ({ mark, senderTime, minLate, maxLate, avgLate, minSize, maxSize, avgSize }) => {
       const recvNow = Date.now();
       const netDelta = recvNow - senderTime;      // 발신-수신 벽시계 차
 
       let avgDecode = sumDecode / dInx;
+      const varDecode = dInx > 0 ? (sumDecodeSq / dInx) - (avgDecode ** 2) : 0;
+      const stdDecode = Math.sqrt(Math.max(varDecode, 0));
 
       let label = '';
       if (mark === 60000) label = '⏱️ 1분';
@@ -261,10 +265,24 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (mark === 1800000) label = '🏁 30분(끝)';
 
       const avgCpu = cpuCount > 0 ? sumCpu / cpuCount : 0;
-      const milestoneMsg = `\n${label} 지점 도착!` +
-        `\n  📊 delay 통계   avg ${avgLate} ms | min ${minLate} ms | max ${maxLate} ms` +
-        `\n  🎞️ 디코딩→화면 지연 avg ${avgDecode} ms | min ${minDecode.toFixed(1)} ms | max ${maxDecode.toFixed(1)} ms` +
-        `\n  🖥️ CPU 사용량   avg ${avgCpu.toFixed(2)}% | min ${minCpuUsage.toFixed(2)}% | max ${maxCpuUsage.toFixed(2)}%`;
+      const avgGpu = gpuCount > 0 ? sumGpu / gpuCount : 'N/A';
+      const avgMem = memCount > 0 ? sumMem / memCount : 0;
+
+      const decodeLine = `🎞️ 디코딩→화면 지연 avg ${avgDecode.toFixed(1)} ms (표준편차 ${stdDecode.toFixed(1)}) | `
+        + `min ${minDecode.toFixed(1)} ms | max ${maxDecode.toFixed(1)} ms`;
+
+      const resourceLine = `🖥️ CPU avg ${avgCpu.toFixed(1)}% | min ${minCpu.toFixed(1)}% | max ${maxCpu.toFixed(1)}%`
+        + `\n  🖥️ GPU avg ${avgGpu === 'N/A' ? 'N/A' : avgGpu.toFixed(1) + '%'}`
+        + (avgGpu === 'N/A' ? '' : ` | min ${minGpu.toFixed(1)}% | max ${maxGpu.toFixed(1)}%`)
+        + `\n  🗄️ MEM avg ${avgMem.toFixed(1)} MB | min ${minMem.toFixed(1)} MB | max ${maxMem.toFixed(1)} MB`;
+
+      const sizeLine = `👾 Chunk size stats avg ${avgSize} MB | min ${minSize} MB | max ${maxSize} MB`
+
+      const milestoneMsg = `\n${label} 지점 도착!`
+        + `\n  📊 delay 통계   avg ${avgLate} ms | min ${minLate} ms | max ${maxLate} ms`
+        + `\n  ${decodeLine}`
+        + `\n  ${sizeLine}`
+        + `\n  ${resourceLine}`;
 
       logMessage(milestoneMsg);
 
@@ -285,8 +303,18 @@ document.addEventListener('DOMContentLoaded', () => {
         framesReceived: chunkIdx,
         cpuUsage: {
           avg: avgCpu,
-          min: minCpuUsage,
-          max: maxCpuUsage
+          min: minCpu,
+          max: maxCpu
+        },
+        gpuUsage: {
+          avg: avgGpu,
+          min: minGpu,
+          max: maxGpu
+        },
+        memoryUsage: {
+          avg: avgMem,
+          min: minMem,
+          max: maxMem
         }
       };
 
@@ -312,26 +340,92 @@ function getCpuInfo() {
   return { idle, total };
 }
 let prevCpuGlobal = getCpuInfo();
-let sumCpu = 0;
-let cpuCount = 0;
-let minCpuUsage = Infinity;
-let maxCpuUsage = -Infinity;
-let lastCpuUsage = 0;
+let sumCpu = 0, cpuCount = 0;
+let minCpu = Infinity; let maxCpu = -Infinity;
 
-setInterval(() => {
-  const currCpu = getCpuInfo();
-  const idleDiff = currCpu.idle - prevCpuGlobal.idle;
-  const totalDiff = currCpu.total - prevCpuGlobal.total;
-  lastCpuUsage = (1 - idleDiff / totalDiff) * 100;
+let sumGpu = 0, gpuCount = 0;
+let minGpu = Infinity, maxGpu = -Infinity;
 
-  // 누적·카운트·min/max 업데이트
-  sumCpu += lastCpuUsage;
-  cpuCount++;
-  if (lastCpuUsage < minCpuUsage) minCpuUsage = lastCpuUsage;
-  if (lastCpuUsage > maxCpuUsage) maxCpuUsage = lastCpuUsage;
+let sumMem = 0, memCount = 0;
+let minMem = Infinity, maxMem = -Infinity;
 
-  prevCpuGlobal = currCpu;
+const monitoringInterval = setInterval(async () => {
+  // const currCpu = getCpuInfo();
+  // const idleDiff = currCpu.idle - prevCpuGlobal.idle;
+  // const totalDiff = currCpu.total - prevCpuGlobal.total;
+  // lastCpuUsage = (1 - idleDiff / totalDiff) * 100;
+
+  // sumCpu += lastCpuUsage;
+  // cpuCount++;
+  // if (lastCpuUsage < minCpuUsage) minCpuUsage = lastCpuUsage;
+  // if (lastCpuUsage > maxCpuUsage) maxCpuUsage = lastCpuUsage;
+
+  // prevCpuGlobal = currCpu;
+
+  try {
+    // pidusage: cpu(%)  memory(bytes)
+    const { cpu, memory } = await pidusage(process.pid);
+
+    /* ── CPU (프로세스 단위) ── */
+    sumCpu += cpu;  cpuCount++;
+    if (cpu < minCpu) minCpu = cpu;
+    if (cpu > maxCpu) maxCpu = cpu;
+
+    /* ── MEM (RSS MB) ── */
+    const memMB = memory / (1024 * 1024);
+    sumMem += memMB; memCount++;
+    if (memMB < minMem) minMem = memMB;
+    if (memMB > maxMem) maxMem = memMB;
+
+  } catch (e) { }
+
+  const gpuUtil = await queryGpuUtil();
+  if (gpuUtil !== null) {
+    sumGpu += gpuUtil;  gpuCount++;
+    if (gpuUtil < minGpu) minGpu = gpuUtil;
+    if (gpuUtil > maxGpu) maxGpu = gpuUtil;
+  }
 }, 5000);
+
+async function queryGpuUtil() {
+  // 1) NVIDIA
+  try {
+    const { stdout } = await execP('nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits');
+    const v = parseFloat(stdout.trim());
+    if (!isNaN(v)) return v;
+  } catch {}
+
+  // 2) Intel iGPU
+  try {
+    const { stdout } = await execP('intel_gpu_top -J -s 1000 -o - | head -n 20');
+    const m = stdout.match(/"busy"\s*:\s*(\d+(\.\d+)?)/);
+    if (m) return parseFloat(m[1]);
+  } catch {}
+
+  // 3) AMD Radeon
+  try {
+    const { stdout } = await execP('rocm-smi --showuse');
+    const m = stdout.match(/GPU use \: (\d+)%/i);
+    if (m) return parseFloat(m[1]);
+  } catch {}
+  try {
+    const { stdout } = await execP('radeontop -d - -l 1');
+    const m = stdout.match(/gpu\s+(\d+\.\d+)%/i);
+    if (m) return parseFloat(m[1]);
+  } catch {}
+
+  // 4) Apple Silicon (macOS)
+  if (process.platform === 'darwin') {
+    try {
+      const { stdout } = await execP('powermetrics --samplers gpu_power -n 1 2>/dev/null');
+      const m = stdout.match(/Average Utilization\s+(\d+(\.\d+)?)%/i);
+      if (m) return parseFloat(m[1]);
+    } catch {}
+  }
+
+  // 암것도 안 속함
+  return null;
+}
 
 // 프로그램 종료 시 자원 정리
 process.on('SIGINT', () => {
