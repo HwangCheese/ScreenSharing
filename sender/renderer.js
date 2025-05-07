@@ -1,15 +1,15 @@
 const { ipcRenderer } = require("electron");
 const io = require('socket.io-client');
-//const socket = io('http://192.168.137.1:3000'); // For different computers
-const socket = io('http://localhost:3000');  // For local testing
+//const socket = io('http://192.168.137.1:3000'); 
+const socket = io('http://localhost:3000'); 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { exec } = require("child_process");
 
-let userClickTime = null;      // User click time
-let frameSentTime = null; // First frame send time
-let startTime = null;          // Recording start time
+let userClickTime = null; 
+let frameSentTime = null; 
+let startTime = null; 
 
 const now = new Date();
 const timestamp = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
@@ -33,11 +33,15 @@ let mediaRecorder;
 const chunks = new Array(MAX);
 let chunkIdx = 0;
 
-// Timing variables
-let lastChunkTime = null;  // Time when previous chunk was created
-const chunkTimes = new Array(MAX);  // Store all chunk creation times
-const chunkDurations = new Array(MAX); // Store durations between chunks
-const MILESTONES = [60000, 300000, 1800000]; // 1min, 5min, 30min
+let lastChunkTime = null;  
+const chunkTimes = new Array(MAX);  
+const chunkDurations = new Array(MAX); 
+const chunkSizes = new Array(MAX);
+let sumSize = 0;
+let minSize = Infinity;
+let maxSize = -Infinity;
+
+const MILESTONES = [60000, 300000, 1800000]; 
 
 async function startScreenShare() {
     userClickTime = Date.now();
@@ -103,25 +107,23 @@ async function startScreenShare() {
                 });
             };
             reader.readAsArrayBuffer(blob);
+
+            const avgSizeNow = chunkIdx ? (sumSize / chunkIdx) / (1024 * 1024) : 0;
             
-            // Save chunk timing data
             const timingData = {
-                chunkTimes: chunkTimes.slice(0, chunkIdx),
                 chunkDurations: chunkDurations.slice(0, chunkIdx-1),
-                averageDuration: chunkDurations.reduce((a, b) => a + b, 0) / (chunkIdx - 1)
+                chunkSizes: chunkSizes.slice(0, chunkIdx),
+                averageDuration: chunkDurations.reduce((a, b) => a + b, 0) / (chunkIdx - 1),
+                sizeStats: { avg: avgSizeNow, min: minSize / (1024 * 1024), max: maxSize / (1024 * 1024) }
             };
             fs.writeFileSync(`chunk_timing_${timestamp}.json`, JSON.stringify(timingData));
             console.log(`Chunk timing data saved to chunk_timing_${timestamp}.json`);
         };
 
-        // Handle chunk creation
         mediaRecorder.ondataavailable = async (event) => {
             frameSentTime = performance.now();
-            
-            // Calculate duration since last chunk
             const sliceDurMs = lastChunkTime ? frameSentTime - lastChunkTime : 0;
             
-            // Store timing info
             chunkTimes[chunkIdx] = frameSentTime;
             if (lastChunkTime) {
                 chunkDurations[chunkIdx-1] = sliceDurMs;
@@ -131,16 +133,13 @@ async function startScreenShare() {
 
             if (event.data.size > 0) {
                 chunks[chunkIdx % MAX] = event.data;
+                chunkSizes[chunkIdx] = event.data.size;
                 const buffer = await event.data.arrayBuffer();
             
-                // Record first frame send time
-                // const isFirst = (chunkIdx === 0);
-                // if (isFirst) {
-                //     firstFrameSentTime = Date.now();
-                //     const latency = firstFrameSentTime - userClickTime;
-                //     console.log(`First frame ready to send ${latency}ms after button click`);
-                // }
-            
+                sumSize += event.data.size;
+    if (event.data.size < minSize) minSize = event.data.size;
+    if (event.data.size > maxSize) maxSize = event.data.size;
+
                 // Send frame to server with timing metadata
                 socket.emit('video-frame', {
                     buffer,
@@ -149,13 +148,9 @@ async function startScreenShare() {
                     tAbs: Date.now(),
                 });
             
-                console.log(`Chunk #${chunkIdx} generated, interval = ${sliceDurMs.toFixed(2)}ms`);  // ⬅️ 추가
+                //console.log(`Chunk #${chunkIdx} generated, interval = ${sliceDurMs.toFixed(2)}ms`);  // ⬅️ 추가
             
                 chunkIdx++;
-            
-                if (chunkIdx % 30 === 0) {
-                    console.log(`Sent chunk #${chunkIdx}, duration: ${sliceDurMs.toFixed(1)}ms`);
-                }
             }
             
         };
@@ -174,7 +169,8 @@ async function startScreenShare() {
                 // Calculate average chunk duration at this point
                 const durations = chunkDurations.slice(0, chunkIdx);
                 const avgDuration = durations.reduce((a, b) => a + b, 0) / durations.length;
-                
+                const avgSizeNow = chunkIdx ? (sumSize / chunkIdx) / (1024 * 1024) : 0;
+
                 socket.emit("milestone", {
                     mark: ms,
                     senderTime: Date.now(),
@@ -182,7 +178,10 @@ async function startScreenShare() {
                     totalChunks: chunkIdx,
                     minLate: minLate,
                     maxLate: maxLate,
-                    avgLate: sumLate / latencyIdx
+                    avgLate: sumLate / latencyIdx,
+                    minSize: minSize / (1024 * 1024),
+                    maxSize: maxSize / (1024 * 1024),
+                    avgSize: avgSizeNow
                 });
                 
                 console.log(`Milestone ${ms}ms: Average chunk duration = ${avgDuration.toFixed(2)}ms`);
