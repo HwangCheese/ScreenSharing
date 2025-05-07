@@ -42,7 +42,7 @@ io.on('connection', (socket) => {
       idx: data.idx,
       dur: data.dur,
     });
-2
+
     socket.emit('ack-frame', {
 
     });
