@@ -464,12 +464,39 @@ async function queryGpuUtil() {
   } catch {}
 
   // 4) Apple Silicon (macOS)
+  // 4) Apple Silicon (macOS)
+  // darwin (Intel / Apple Silicon 공통)
   if (process.platform === 'darwin') {
+    /* 1) powermetrics – 가장 정확하지만 sudo 필요 */
     try {
-      const { stdout } = await execP('powermetrics --samplers gpu_power -n 1 2>/dev/null');
-      const m = stdout.match(/Average Utilization\s+(\d+(\.\d+)?)%/i);
+      const { stdout } = await execP(
+        'sudo powermetrics --samplers gpu_power -n 1 2>/dev/null'
+      );
+      const m = stdout.match(/GPU HW active residency:\s+([\d.]+)%/i) ||     // ← 추가①
+          stdout.match(/Average GPU Utilization\s+:\s+([\d.]+)%/i)  ||
+          stdout.match(/Average Utilization\s+([\d.]+)%/i);
       if (m) return parseFloat(m[1]);
-    } catch {}
+    } catch { }   // sudo 권한 없으면 패스
+
+    /* 2) ioreg – 별도 권한 없이 가능 (Apple Silicon 기준) */
+    try {
+      const { stdout } = await execP(
+        'ioreg -r -c AppleGPUWrangler | grep -i "gpuActive"'
+      );
+      // 예) "gpuActive" = 35
+      const m = stdout.match(/"gpuActive" = (\d+)/);
+      if (m) return parseFloat(m[1]);     // %
+    } catch { }
+
+    /* 3) Intel 맥북(구형)용 – AGPM reading */
+    try {
+      const { stdout } = await execP(
+        'ioreg -r -c AGPM -k GPU -n "Intel*" | grep -i "AcceleratorUsage"'
+      );
+      // 예) "AcceleratorUsage" = 24
+      const m = stdout.match(/AcceleratorUsage" = (\d+)/);
+      if (m) return parseFloat(m[1]);
+    } catch { }
   }
 
   // 5) Windows 10/11
