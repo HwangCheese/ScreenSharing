@@ -265,16 +265,26 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (mark === 1800000) label = '🏁 30분(끝)';
 
       const avgCpu = cpuCount > 0 ? sumCpu / cpuCount : 0;
-      const avgGpu = gpuCount > 0 ? sumGpu / gpuCount : 'N/A';
+      const stdCpu = cpuCount > 0 ? Math.sqrt((sumCpuSq / cpuCount) - avgCpu ** 2) : 0;
+
+      const haveGpu = gpuCount > 0;
+      const avgGpu  = haveGpu ? sumGpu / gpuCount : 0;
+      const stdGpu  = haveGpu ? Math.sqrt((sumGpuSq / gpuCount) - avgGpu ** 2) : 0;
+
       const avgMem = memCount > 0 ? sumMem / memCount : 0;
+      const stdMem  = memCount > 0 ? Math.sqrt((sumMemSq / memCount) - avgMem ** 2) : 0;
 
       const decodeLine = `🎞️ 디코딩→화면 지연 avg ${avgDecode.toFixed(1)} ms (표준편차 ${stdDecode.toFixed(1)}) | `
         + `min ${minDecode.toFixed(1)} ms | max ${maxDecode.toFixed(1)} ms`;
 
-      const resourceLine = `🖥️ CPU avg ${avgCpu.toFixed(1)}% | min ${minCpu.toFixed(1)}% | max ${maxCpu.toFixed(1)}%`
-        + `\n  🖥️ GPU avg ${avgGpu === 'N/A' ? 'N/A' : avgGpu.toFixed(1) + '%'}`
-        + (avgGpu === 'N/A' ? '' : ` | min ${minGpu.toFixed(1)}% | max ${maxGpu.toFixed(1)}%`)
-        + `\n  🗄️ MEM avg ${avgMem.toFixed(1)} MB | min ${minMem.toFixed(1)} MB | max ${maxMem.toFixed(1)} MB`;
+      const resourceLine = `🖥️ CPU avg ${avgCpu.toFixed(1)}% (표준편차 ${stdCpu.toFixed(1)}) | `
+                            + `min ${minCpu.toFixed(1)}% | max ${maxCpu.toFixed(1)}%`
+                            + (haveGpu
+                              ? `\n  🖥️ GPU avg ${avgGpu.toFixed(1)}% (표준편차 ${stdGpu.toFixed(1)}) `
+                                + `| min ${minGpu.toFixed(1)}% | max ${maxGpu.toFixed(1)}%`
+                              : `\n  🖥️ GPU N/A`)
+                            + `\n  🗄️ MEM avg ${avgMem.toFixed(1)} MB (표준편차 ${stdMem.toFixed(1)}) `
+                            + `| min ${minMem.toFixed(1)} MB | max ${maxMem.toFixed(1)} MB`;
 
       const sizeLine = `👾 Chunk size stats avg ${avgSize} MB | min ${minSize} MB | max ${maxSize} MB`
 
@@ -303,16 +313,19 @@ document.addEventListener('DOMContentLoaded', () => {
         framesReceived: chunkIdx,
         cpuUsage: {
           avg: avgCpu,
+          std: stdCpu,
           min: minCpu,
           max: maxCpu
         },
-        gpuUsage: {
+        gpuUsage: haveGpu ? {
           avg: avgGpu,
+          std: stdGpu,
           min: minGpu,
           max: maxGpu
-        },
+        } : null,
         memoryUsage: {
           avg: avgMem,
+          std: stdMem,
           min: minMem,
           max: maxMem
         }
@@ -340,40 +353,28 @@ function getCpuInfo() {
   return { idle, total };
 }
 let prevCpuGlobal = getCpuInfo();
-let sumCpu = 0, cpuCount = 0;
+let sumCpu = 0, sumCpuSq = 0, cpuCount = 0;
 let minCpu = Infinity; let maxCpu = -Infinity;
 
-let sumGpu = 0, gpuCount = 0;
+let sumGpu = 0, sumGpuSq = 0, gpuCount = 0;
 let minGpu = Infinity, maxGpu = -Infinity;
 
-let sumMem = 0, memCount = 0;
+let sumMem = 0, sumMemSq = 0, memCount = 0;
 let minMem = Infinity, maxMem = -Infinity;
 
 const monitoringInterval = setInterval(async () => {
-  // const currCpu = getCpuInfo();
-  // const idleDiff = currCpu.idle - prevCpuGlobal.idle;
-  // const totalDiff = currCpu.total - prevCpuGlobal.total;
-  // lastCpuUsage = (1 - idleDiff / totalDiff) * 100;
-
-  // sumCpu += lastCpuUsage;
-  // cpuCount++;
-  // if (lastCpuUsage < minCpuUsage) minCpuUsage = lastCpuUsage;
-  // if (lastCpuUsage > maxCpuUsage) maxCpuUsage = lastCpuUsage;
-
-  // prevCpuGlobal = currCpu;
-
   try {
     // pidusage: cpu(%)  memory(bytes)
     const { cpu, memory } = await pidusage(process.pid);
 
     /* ── CPU (프로세스 단위) ── */
-    sumCpu += cpu;  cpuCount++;
+    sumCpu += cpu; sumCpuSq  += cpu * cpu; cpuCount++;
     if (cpu < minCpu) minCpu = cpu;
     if (cpu > maxCpu) maxCpu = cpu;
 
     /* ── MEM (RSS MB) ── */
     const memMB = memory / (1024 * 1024);
-    sumMem += memMB; memCount++;
+    sumMem += memMB; sumMemSq  += memMB * memMB; memCount++;
     if (memMB < minMem) minMem = memMB;
     if (memMB > maxMem) maxMem = memMB;
 
@@ -381,7 +382,7 @@ const monitoringInterval = setInterval(async () => {
 
   const gpuUtil = await queryGpuUtil();
   if (gpuUtil !== null) {
-    sumGpu += gpuUtil;  gpuCount++;
+    sumGpu += gpuUtil; sumGpuSq += gpuUtil * gpuUtil; gpuCount++;
     if (gpuUtil < minGpu) minGpu = gpuUtil;
     if (gpuUtil > maxGpu) maxGpu = gpuUtil;
   }
@@ -420,6 +421,38 @@ async function queryGpuUtil() {
       const { stdout } = await execP('powermetrics --samplers gpu_power -n 1 2>/dev/null');
       const m = stdout.match(/Average Utilization\s+(\d+(\.\d+)?)%/i);
       if (m) return parseFloat(m[1]);
+    } catch {}
+  }
+
+  // 5) Windows 10/11
+  if (process.platform === 'win32') {
+    /* 3-A) typeperf 한 샘플 (-sc 1) */
+    try {
+      const { stdout } = await execP(
+        'typeperf "\\\\GPU Engine(*)\\\\Utilization Percentage" -sc 1'
+      );
+      const lines = stdout.trim().split(/\r?\n/);
+      const last = lines[lines.length - 1];
+      const nums = last.split(',').slice(1)          // 첫 컬럼은 타임스탬프
+        .map(s => parseFloat(s.replace(/"/g, '')))
+        .filter(n => !isNaN(n) && n > 0);
+      if (nums.length) {
+        return nums.reduce((a, b) => a + b, 0) / nums.length;
+      }
+    } catch {}
+
+    /* 3-B) wmic (WMI 카운터) */
+    try {
+      const { stdout } = await execP(
+        'wmic path Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine ' +
+        'get UtilizationPercentage /format:csv'
+      );
+      const nums = stdout.split(/\r?\n/)
+        .map(l => parseFloat(l.split(',').pop()))
+        .filter(n => !isNaN(n) && n > 0);
+      if (nums.length) {
+        return nums.reduce((a, b) => a + b, 0) / nums.length;
+      }
     } catch {}
   }
 
