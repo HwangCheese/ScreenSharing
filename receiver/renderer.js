@@ -421,22 +421,20 @@ const monitoringInterval = setInterval(async () => {
 
 async function queryGpuUtil() {
   if (process.platform === 'linux') {
-    /* A) tegrastats (stderr → stdout) */
     try {
-      const { stdout, stderr } =
-        await execP('/usr/bin/tegrastats --interval 100 --count 1 2>&1');
-      const line = stdout || stderr;
-      const m = line.match(/GR3D_FREQ\s+(\d+)%/);
+      const { stdout, stderr } = await execP(
+        '/usr/bin/tegrastats --interval 100 2>&1 | head -n 1'
+      ); 
+      const line = (stdout || stderr).trim();
+      const m = line.match(/GR3D_FREQ\s+(\d+)%/i);
       if (m) return parseFloat(m[1]);
-    } catch {}
+    } catch { }
 
-    /* B) sysfs load (0-255) */
     try {
-      const { stdout } =
-        await execP('cat $(ls -d /sys/devices/*gpu*/load | head -n1)');
-      const v = parseInt(stdout.trim(), 10);
-      if (!isNaN(v)) return v * 100 / 256;
-    } catch {}
+      const { stdout } = await execP('cat $(ls -d /sys/devices/*gpu*/load | head -n1)');
+      const raw = parseInt(stdout.trim(), 10);
+      if (!isNaN(raw)) return (raw / 256) * 100;
+    } catch { }
   }
 
   // 1) NVIDIA
