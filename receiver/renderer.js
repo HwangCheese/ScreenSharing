@@ -420,6 +420,27 @@ const monitoringInterval = setInterval(async () => {
 }, 5000);
 
 async function queryGpuUtil() {
+  if (process.platform === 'linux') {
+    /* 0-A) tegrastats 한 줄만 읽기 */
+    try {
+      // --count 1 옵션은 JetPack 6 이상, 없으면 head -n 1 로 한 줄만
+      const { stdout } = await execP(
+        'tegrastats --interval 100 --count 1 2>/dev/null || ' +
+        'tegrastats --interval 100 2>/dev/null | head -n 1'
+      );
+      // 예) … GR3D_FREQ 23% …
+      const m = stdout.match(/GR3D_FREQ\s+(\d+)%/);
+      if (m) return parseFloat(m[1]);
+    } catch {}   // tegrastats 미설치 → 다음 시도
+
+    /* 0-B) sysfs 노드 (0-255 스케일) */
+    try {
+      const { stdout } = await execP('cat /sys/devices/gpu.0/load');
+      const v = parseInt(stdout.trim(), 10);        // 0-255
+      if (!isNaN(v)) return (v / 256) * 100;        // % 로 변환
+    } catch {}
+  }
+
   // 1) NVIDIA
   try {
     const { stdout } = await execP('nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits');
