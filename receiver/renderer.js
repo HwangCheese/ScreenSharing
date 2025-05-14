@@ -5,9 +5,10 @@ const fs = require('fs');
 const { exec } = require("child_process");
 const pidusage = require('pidusage');
 const os = require('os');
-const util = require('util');
+const util  = require('util');
 const { memoryUsage } = require('process');
 const execP = util.promisify(exec);
+const si = require('systeminformation');
 
 const now = new Date();
 const timestamp = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
@@ -268,29 +269,36 @@ document.addEventListener('DOMContentLoaded', () => {
       const stdCpu = cpuCount > 0 ? Math.sqrt((sumCpuSq / cpuCount) - avgCpu ** 2) : 0;
 
       const haveGpu = gpuCount > 0;
-      const avgGpu = haveGpu ? sumGpu / gpuCount : 0;
-      const stdGpu = haveGpu ? Math.sqrt((sumGpuSq / gpuCount) - avgGpu ** 2) : 0;
+      const avgGpu  = haveGpu ? sumGpu / gpuCount : 0;
+      const stdGpu  = haveGpu ? Math.sqrt((sumGpuSq / gpuCount) - avgGpu ** 2) : 0;
 
       const avgMem = memCount > 0 ? sumMem / memCount : 0;
-      const stdMem = memCount > 0 ? Math.sqrt((sumMemSq / memCount) - avgMem ** 2) : 0;
+      const stdMem  = memCount > 0 ? Math.sqrt((sumMemSq / memCount) - avgMem ** 2) : 0;
+
+      const avgRx = rxCount ? sumRx / rxCount : 0;
+      const stdRx = rxCount ? Math.sqrt((sumRxSq / rxCount) - avgRx ** 2) : 0;
 
       const decodeLine = `🎞️ 디코딩→화면 지연 avg ${avgDecode.toFixed(1)} ms (표준편차 ${stdDecode.toFixed(1)}) | `
         + `min ${minDecode.toFixed(1)} ms | max ${maxDecode.toFixed(1)} ms`;
 
       const resourceLine = `🖥️ CPU avg ${avgCpu.toFixed(1)}% (표준편차 ${stdCpu.toFixed(1)}) | `
-        + `min ${minCpu.toFixed(1)}% | max ${maxCpu.toFixed(1)}%`
-        + (haveGpu
-          ? `\n  🖥️ GPU avg ${avgGpu.toFixed(1)}% (표준편차 ${stdGpu.toFixed(1)}) `
-          + `| min ${minGpu.toFixed(1)}% | max ${maxGpu.toFixed(1)}%`
-          : `\n  🖥️ GPU N/A`)
-        + `\n  🗄️ MEM avg ${avgMem.toFixed(1)} MB (표준편차 ${stdMem.toFixed(1)}) `
-        + `| min ${minMem.toFixed(1)} MB | max ${maxMem.toFixed(1)} MB`;
+                            + `min ${minCpu.toFixed(1)}% | max ${maxCpu.toFixed(1)}%`
+                            + (haveGpu
+                              ? `\n  🖥️ GPU avg ${avgGpu.toFixed(1)}% (표준편차 ${stdGpu.toFixed(1)}) `
+                                + `| min ${minGpu.toFixed(1)}% | max ${maxGpu.toFixed(1)}%`
+                              : `\n  🖥️ GPU N/A`)
+                            + `\n  🗄️ MEM avg ${avgMem.toFixed(1)} MB (표준편차 ${stdMem.toFixed(1)}) `
+                            + `| min ${minMem.toFixed(1)} MB | max ${maxMem.toFixed(1)} MB`;
+
+      const netLine = `🌐 NET Rx avg ${avgRx.toFixed(2)} Mbps (표준편차 ${stdRx.toFixed(2)}) `
+               + `| min ${minRx.toFixed(2)} | max ${maxRx.toFixed(2)}`;
 
       const sizeLine = `👾 Chunk size stats avg ${avgSize} MB (표준편차 ${stdSize}) | min ${minSize} MB | max ${maxSize} MB`
 
       const milestoneMsg = `\n${label} 지점 도착!`
         + `\n  📊 delay 통계   avg ${avgLate} ms (표준편차 ${stdLate}) | min ${minLate} ms | max ${maxLate} ms`
         + `\n  ${decodeLine}`
+        + `\n  ${netLine}`
         + `\n  ${sizeLine}`
         + `\n  ${resourceLine}`;
 
@@ -328,6 +336,12 @@ document.addEventListener('DOMContentLoaded', () => {
           std: stdMem,
           min: minMem,
           max: maxMem
+        },
+        network: {
+          avg: avgRx,
+          std: stdRx,
+          min: minRx,
+          max: maxRx
         }
       };
 
@@ -362,19 +376,22 @@ let minGpu = Infinity, maxGpu = -Infinity;
 let sumMem = 0, sumMemSq = 0, memCount = 0;
 let minMem = Infinity, maxMem = -Infinity;
 
+let sumRx = 0,  sumRxSq = 0,  rxCount = 0;
+let minRx = Infinity, maxRx = -Infinity;
+
 const monitoringInterval = setInterval(async () => {
   try {
     // pidusage: cpu(%)  memory(bytes)
     const { cpu, memory } = await pidusage(process.pid);
 
     /* ── CPU (프로세스 단위) ── */
-    sumCpu += cpu; sumCpuSq += cpu * cpu; cpuCount++;
+    sumCpu += cpu; sumCpuSq  += cpu * cpu; cpuCount++;
     if (cpu < minCpu) minCpu = cpu;
     if (cpu > maxCpu) maxCpu = cpu;
 
     /* ── MEM (RSS MB) ── */
     const memMB = memory / (1024 * 1024);
-    sumMem += memMB; sumMemSq += memMB * memMB; memCount++;
+    sumMem += memMB; sumMemSq  += memMB * memMB; memCount++;
     if (memMB < minMem) minMem = memMB;
     if (memMB > maxMem) maxMem = memMB;
 
@@ -386,6 +403,20 @@ const monitoringInterval = setInterval(async () => {
     if (gpuUtil < minGpu) minGpu = gpuUtil;
     if (gpuUtil > maxGpu) maxGpu = gpuUtil;
   }
+
+  try {
+    const nets = await si.networkStats();
+    const rxBps = nets.reduce((a, n) => a + n.rx_sec, 0);
+    const rxMbps = (rxBps * 8) / 1e6;
+
+    sumRx += rxMbps;
+    sumRxSq += rxMbps * rxMbps;
+    rxCount++;
+
+    if (rxMbps < minRx) minRx = rxMbps;
+    if (rxMbps > maxRx) maxRx = rxMbps;
+  } catch (e) { }
+
 }, 5000);
 
 async function queryGpuUtil() {
@@ -394,60 +425,34 @@ async function queryGpuUtil() {
     const { stdout } = await execP('nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits');
     const v = parseFloat(stdout.trim());
     if (!isNaN(v)) return v;
-  } catch { }
+  } catch {}
 
   // 2) Intel iGPU
   try {
     const { stdout } = await execP('intel_gpu_top -J -s 1000 -o - | head -n 20');
     const m = stdout.match(/"busy"\s*:\s*(\d+(\.\d+)?)/);
     if (m) return parseFloat(m[1]);
-  } catch { }
+  } catch {}
 
   // 3) AMD Radeon
   try {
     const { stdout } = await execP('rocm-smi --showuse');
     const m = stdout.match(/GPU use \: (\d+)%/i);
     if (m) return parseFloat(m[1]);
-  } catch { }
+  } catch {}
   try {
     const { stdout } = await execP('radeontop -d - -l 1');
     const m = stdout.match(/gpu\s+(\d+\.\d+)%/i);
     if (m) return parseFloat(m[1]);
-  } catch { }
+  } catch {}
 
   // 4) Apple Silicon (macOS)
-  // darwin (Intel / Apple Silicon 공통)
   if (process.platform === 'darwin') {
-    /* 1) powermetrics – 가장 정확하지만 sudo 필요 */
     try {
-      const { stdout } = await execP(
-        'sudo powermetrics --samplers gpu_power -n 1 2>/dev/null'
-      );
-      const m = stdout.match(/GPU HW active residency:\s+([\d.]+)%/i) ||     // ← 추가①
-          stdout.match(/Average GPU Utilization\s+:\s+([\d.]+)%/i)  ||
-          stdout.match(/Average Utilization\s+([\d.]+)%/i);
+      const { stdout } = await execP('powermetrics --samplers gpu_power -n 1 2>/dev/null');
+      const m = stdout.match(/Average Utilization\s+(\d+(\.\d+)?)%/i);
       if (m) return parseFloat(m[1]);
-    } catch { }   // sudo 권한 없으면 패스
-
-    /* 2) ioreg – 별도 권한 없이 가능 (Apple Silicon 기준) */
-    try {
-      const { stdout } = await execP(
-        'ioreg -r -c AppleGPUWrangler | grep -i "gpuActive"'
-      );
-      // 예) "gpuActive" = 35
-      const m = stdout.match(/"gpuActive" = (\d+)/);
-      if (m) return parseFloat(m[1]);     // %
-    } catch { }
-
-    /* 3) Intel 맥북(구형)용 – AGPM reading */
-    try {
-      const { stdout } = await execP(
-        'ioreg -r -c AGPM -k GPU -n "Intel*" | grep -i "AcceleratorUsage"'
-      );
-      // 예) "AcceleratorUsage" = 24
-      const m = stdout.match(/AcceleratorUsage" = (\d+)/);
-      if (m) return parseFloat(m[1]);
-    } catch { }
+    } catch {}
   }
 
   // 5) Windows 10/11
@@ -466,7 +471,7 @@ async function queryGpuUtil() {
       if (nums.length) {
         return nums.reduce((a, b) => a + b, 0) / nums.length;
       }
-    } catch { }
+    } catch {}
 
     /* 3-B) wmic (WMI 카운터) */
     try {
@@ -480,7 +485,7 @@ async function queryGpuUtil() {
       if (nums.length) {
         return nums.reduce((a, b) => a + b, 0) / nums.length;
       }
-    } catch { }
+    } catch {}
   }
 
   // 암것도 안 속함
