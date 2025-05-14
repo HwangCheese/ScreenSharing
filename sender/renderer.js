@@ -37,7 +37,7 @@ let lastChunkTime = null;
 const chunkTimes = new Array(MAX);  
 const chunkDurations = new Array(MAX); 
 const chunkSizes = new Array(MAX);
-let sumSize = 0;
+let sumSize = 0, sumSizeSq = 0, sizeCount = 0;
 let minSize = Infinity;
 let maxSize = -Infinity;
 
@@ -136,9 +136,13 @@ async function startScreenShare() {
                 chunkSizes[chunkIdx] = event.data.size;
                 const buffer = await event.data.arrayBuffer();
             
-                sumSize += event.data.size;
-    if (event.data.size < minSize) minSize = event.data.size;
-    if (event.data.size > maxSize) maxSize = event.data.size;
+                const sz = event.data.size;
+                sumSize   += sz;
+                sumSizeSq += sz * sz; 
+                sizeCount++;
+
+                if (sz < minSize) minSize = sz;
+                if (sz > maxSize) maxSize = sz;
 
                 // Send frame to server with timing metadata
                 socket.emit('video-frame', {
@@ -169,7 +173,17 @@ async function startScreenShare() {
                 // Calculate average chunk duration at this point
                 const durations = chunkDurations.slice(0, chunkIdx);
                 const avgDuration = durations.reduce((a, b) => a + b, 0) / durations.length;
+                
+                const avgLateNow = latencyIdx ? sumLate / latencyIdx : 0;
+                const stdLateNow = latencyIdx
+                    ? Math.sqrt((sumLateSq / latencyIdx) - avgLateNow ** 2)
+                    : 0;
+
+                
                 const avgSizeNow = chunkIdx ? (sumSize / chunkIdx) / (1024 * 1024) : 0;
+                const stdSizeNow = sizeCount
+                        ? Math.sqrt((sumSizeSq / sizeCount) - (sumSize / sizeCount) ** 2) / (1024*1024)
+                        : 0;
 
                 socket.emit("milestone", {
                     mark: ms,
@@ -178,17 +192,18 @@ async function startScreenShare() {
                     totalChunks: chunkIdx,
                     minLate: minLate,
                     maxLate: maxLate,
-                    avgLate: sumLate / latencyIdx,
+                    avgLate: avgLateNow,
+                    stdLate: stdLateNow,
                     minSize: minSize / (1024 * 1024),
                     maxSize: maxSize / (1024 * 1024),
-                    avgSize: avgSizeNow
+                    avgSize: avgSizeNow,
+                    stdSize: stdSizeNow
                 });
                 
                 console.log(`Milestone ${ms}ms: Average chunk duration = ${avgDuration.toFixed(2)}ms`);
             }, ms);
         });
         
-        // Auto-stop after 30 min
         setTimeout(stopScreenShare, 1800000);
 
     } catch (err) {
@@ -214,52 +229,27 @@ function stopScreenShare() {
 
 const MAX_FRAME_LOG = 10000000;
 const oneWayLatencies = new Array(MAX_FRAME_LOG).fill(null);
-let sumLate = 0;
-let latencyIdx = 0;
-let minLate = Infinity;
-let maxLate = -Infinity;
+let sumLate = 0, sumLateSq = 0, latencyIdx = 0;
+let minLate = Infinity, maxLate = -Infinity;
 
 socket.on('ack-frame', () => {
     const ackReceiveTime = performance.now();
     const rtt = ackReceiveTime - frameSentTime;
     const oneWayLatency = rtt / 2;
+
     oneWayLatencies[latencyIdx % MAX_FRAME_LOG] = oneWayLatency;
+    
     sumLate += oneWayLatency;
+    sumLateSq += oneWayLatency * oneWayLatency;
+
     if (oneWayLatency < minLate) minLate = oneWayLatency;
     if (oneWayLatency > maxLate) maxLate = oneWayLatency;
     latencyIdx++;
 });
 
-// Handle first frame acknowledgment from server
-// socket.on('first-frame-ack', ({ receiveTime, serverTime }) => {
-//     const ackReceiveTime = Date.now(); // Time client received ACK
-//     const rtt = ackReceiveTime - frameSentTime;
-//     const oneWayLatency = rtt / 2;
-    
-//     // Calculate time offset between client and server
-//     const timeOffset = serverTime - ackReceiveTime;
-
-//     console.log(`Received first frame ACK from server!`);
-//     console.log(`RTT (round-trip time): ${rtt}ms`);
-//     console.log(`Estimated one-way latency: ${oneWayLatency.toFixed(2)}ms`);
-//     console.log(`Time offset between client and server: ${timeOffset}ms`);
-    
-//     // Save sync data
-//     fs.writeFileSync(`time_sync_${timestamp}.json`, JSON.stringify({
-//         clientSendTime: frameSentTime,
-//         serverReceiveTime: serverTime,
-//         clientAckTime: ackReceiveTime,
-//         rtt,
-//         estimatedOneWayLatency: oneWayLatency,
-//         timeOffset
-//     }));
-// });
-
-// Set up UI handlers
 document.getElementById('start').addEventListener('click', startScreenShare);
 document.getElementById('stop').addEventListener('click', stopScreenShare);
 
-// FFprobe video analysis
 function analyzeVideoFPS(filePath) {
     const ffprobeCmd = `ffprobe -v error -count_frames -select_streams v:0 \
         -show_entries stream=nb_read_frames -of csv=p=0 "${filePath}"`;
