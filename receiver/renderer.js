@@ -251,7 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 1m, 5m, 30m 마일스톤 오면 한 번만 통계 출력
-    socket.on('milestone', ({ mark, senderTime, minLate, maxLate, avgLate, minSize, maxSize, avgSize }) => {
+    socket.on('milestone', ({ mark, senderTime, minLate, maxLate, avgLate, stdLate, minSize, maxSize, avgSize, stdSize }) => {
       const recvNow = Date.now();
       const netDelta = recvNow - senderTime;      // 발신-수신 벽시계 차
 
@@ -286,10 +286,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             + `\n  🗄️ MEM avg ${avgMem.toFixed(1)} MB (표준편차 ${stdMem.toFixed(1)}) `
                             + `| min ${minMem.toFixed(1)} MB | max ${maxMem.toFixed(1)} MB`;
 
-      const sizeLine = `👾 Chunk size stats avg ${avgSize} MB | min ${minSize} MB | max ${maxSize} MB`
+      const sizeLine = `👾 Chunk size stats avg ${avgSize} MB (표준편차 ${stdSize}) | min ${minSize} MB | max ${maxSize} MB`
 
       const milestoneMsg = `\n${label} 지점 도착!`
-        + `\n  📊 delay 통계   avg ${avgLate} ms | min ${minLate} ms | max ${maxLate} ms`
+        + `\n  📊 delay 통계   avg ${avgLate} ms (표준편차 ${stdLate}) | min ${minLate} ms | max ${maxLate} ms`
         + `\n  ${decodeLine}`
         + `\n  ${sizeLine}`
         + `\n  ${resourceLine}`;
@@ -431,6 +431,7 @@ async function queryGpuUtil() {
       const { stdout } = await execP(
         'typeperf "\\\\GPU Engine(*)\\\\Utilization Percentage" -sc 1'
       );
+      // 마지막 줄이 "YYYY/MM/DD … , n.nn"
       const lines = stdout.trim().split(/\r?\n/);
       const last = lines[lines.length - 1];
       const nums = last.split(',').slice(1)          // 첫 컬럼은 타임스탬프
